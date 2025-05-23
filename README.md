@@ -1,22 +1,36 @@
-### Logfinder
+# Logfinder
 ## How to use the script:
 
-1. **Save the script** as `log_searcher.py`
+1. **Save the script** as `log_finder.py`
 
 2. **Run with a tar file:**
 ```bash
-python log_searcher.py /path/to/your/archive.tar "search_string"
+'Mac'
+python3 log_finder.py /path/to/your/archive.tar "search_string"
+
+'Windows'
+python log_finder.py /path/to/your/archive.tar "search_string"
+
 ```
 
 3. **Run with a directory:**
 ```bash
-python log_searcher.py /path/to/directory "search_string"
+'Mac'
+python3 log_finder.py /path/to/directory "search_string"
+
+'Windows'
+python log_finder.py /path/to/directory "search_string"
 ```
 
 4. **Specify custom output directory:**
 ```bash
-python log_searcher.py /path/to/archive.tar "search_string" -o my_results
+'Mac'
+python3 log_finder.py /path/to/archive.tar "search_string" -o log_results
+
+'Windows'
+python log_finder.py /path/to/archive.tar "search_string" -o log_results
 ```
+***
 
 ## What the script does:
 
@@ -30,6 +44,8 @@ python log_searcher.py /path/to/archive.tar "search_string" -o my_results
    - Number of files with matches
    - Total number of matches
    - For each matching file: filename, number of matches, and line numbers with content
+
+
 
 ## Output structure:
 ```
