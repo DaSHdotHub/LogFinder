@@ -8,6 +8,7 @@ import gzip
 import re
 from pathlib import Path
 from typing import List, Tuple, Dict
+from datetime import datetime
 
 def extract_tar_file(tar_path: str, extract_to: str) -> None:
     """Extract a tar file to the specified directory."""
@@ -47,27 +48,88 @@ def find_compressed_log_files(directory: str) -> List[str]:
                 compressed_files.append(os.path.join(root, file))
     return compressed_files
 
+def parse_timestamp_input(timestamp_str: str) -> List[str]:
+    """
+    Parse a timestamp input and generate multiple search patterns.
+    
+    Input format: yyyy-MM-dd-HH.mm.ss.SSSSSS (e.g., 2025-07-14-08.25.22.214000)
+    
+    Returns a list of timestamp patterns to search for:
+    - Original format: 2025-07-14-08.25.22.214000
+    - ISO format: 2025-07-14T08:25:22
+    - Space format: 2025-07-14 08.25.22
+    - Space with colons: 2025-07-14 08:25:22
+    - Compact format: 20250714082522
+    """
+    patterns = []
+    
+    # Add the original timestamp as-is
+    patterns.append(timestamp_str)
+    
+    # Try to parse the timestamp to generate other formats
+    try:
+        # Parse the input format: yyyy-MM-dd-HH.mm.ss.SSSSSS
+        match = re.match(r'(\d{4})-(\d{2})-(\d{2})-(\d{2})\.(\d{2})\.(\d{2})\.(\d+)', timestamp_str)
+        if match:
+            year, month, day, hour, minute, second, microsecond = match.groups()
+            
+            # ISO format: yyyy-MM-ddTHH:mm:ss
+            patterns.append(f"{year}-{month}-{day}T{hour}:{minute}:{second}")
+            
+            # Space format with dots: yyyy-MM-dd HH.mm.ss
+            patterns.append(f"{year}-{month}-{day} {hour}.{minute}.{second}")
+            
+            # Space format with colons: yyyy-MM-dd HH:mm:ss
+            patterns.append(f"{year}-{month}-{day} {hour}:{minute}:{second}")
+            
+            # Compact format: yyyyMMddHHmmss
+            patterns.append(f"{year}{month}{day}{hour}{minute}{second}")
+            
+            # Another common format: MM/dd/yyyy HH:mm:ss
+            patterns.append(f"{month}/{day}/{year} {hour}:{minute}:{second}")
+            
+    except Exception as e:
+        print(f"Warning: Could not parse timestamp format, using original: {e}")
+    
+    # Remove duplicates while preserving order
+    unique_patterns = []
+    for pattern in patterns:
+        if pattern not in unique_patterns:
+            unique_patterns.append(pattern)
+    
+    return unique_patterns
+
+def is_timestamp_format(search_string: str) -> bool:
+    """Check if the search string looks like a timestamp."""
+    # Check for the specific format: yyyy-MM-dd-HH.mm.ss.SSSSSS
+    timestamp_pattern = r'^\d{4}-\d{2}-\d{2}-\d{2}\.\d{2}\.\d{2}\.\d+$'
+    return bool(re.match(timestamp_pattern, search_string))
+
 def is_compressed_file(file_path: str) -> bool:
     """Check if a file is compressed based on its name."""
     filename = os.path.basename(file_path)
     return filename.endswith('.gz') or re.match(r'.*\.log\.gz_\d+', filename)
 
-def search_in_file(file_path: str, search_string: str) -> List[Tuple[int, str]]:
-    """Search for a string in a file and return line numbers and content."""
+def search_in_file(file_path: str, search_patterns: List[str]) -> List[Tuple[int, str, str]]:
+    """Search for multiple patterns in a file and return line numbers, content, and matched pattern."""
     matches = []
     try:
         if is_compressed_file(file_path):
             # Handle compressed files
             with gzip.open(file_path, 'rt', encoding='utf-8', errors='ignore') as f:
                 for line_num, line in enumerate(f, 1):
-                    if search_string in line:
-                        matches.append((line_num, line.strip()))
+                    for pattern in search_patterns:
+                        if pattern in line:
+                            matches.append((line_num, line.strip(), pattern))
+                            break  # Only record first match per line
         else:
             # Handle uncompressed files
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 for line_num, line in enumerate(f, 1):
-                    if search_string in line:
-                        matches.append((line_num, line.strip()))
+                    for pattern in search_patterns:
+                        if pattern in line:
+                            matches.append((line_num, line.strip(), pattern))
+                            break  # Only record first match per line
     except Exception as e:
         print(f"Error reading file {file_path}: {e}")
     return matches
@@ -90,12 +152,14 @@ def main():
     parser.add_argument('input_path', help='Path to tar file or directory')
     parser.add_argument('search_string', help='String to search for')
     parser.add_argument('-o', '--output', default='search_results', help='Output directory name (default: search_results)')
+    parser.add_argument('-tf', '--timestamp-format', action='store_true', help='Enable timestamp format pattern matching (searches for multiple timestamp formats)')
     
     args = parser.parse_args()
     
     input_path = args.input_path
     search_string = args.search_string
     output_dir = args.output
+    use_timestamp_format = args.timestamp_format
     
     # Create output directory
     if os.path.exists(output_dir):
@@ -145,14 +209,28 @@ def main():
         print(f"Found {len(compressed_log_files)} compressed log files")
         print(f"Total log files: {len(all_log_files)}")
         
-        # Step 4: Search for the string in log files
-        print(f"Searching for '{search_string}' in log files...")
+        # Determine search patterns based on -tf flag
+        if use_timestamp_format and is_timestamp_format(search_string):
+            search_patterns = parse_timestamp_input(search_string)
+            print(f"Timestamp format mode enabled. Searching for {len(search_patterns)} timestamp patterns:")
+            for i, pattern in enumerate(search_patterns, 1):
+                print(f"  {i}. {pattern}")
+        elif use_timestamp_format and not is_timestamp_format(search_string):
+            print(f"Warning: -tf flag provided but '{search_string}' doesn't match timestamp format yyyy-MM-dd-HH.mm.ss.SSSSSS")
+            print(f"Falling back to regular string search for: '{search_string}'")
+            search_patterns = [search_string]
+        else:
+            search_patterns = [search_string]
+            print(f"Searching for string: '{search_string}'")
+        
+        # Step 4: Search for the patterns in log files
+        print(f"Searching in log files...")
         results = {}
         files_with_matches = []
         total_matches = 0
         
         for log_file in all_log_files:
-            matches = search_in_file(log_file, search_string)
+            matches = search_in_file(log_file, search_patterns)
             if matches:
                 rel_path = os.path.relpath(log_file, extraction_dir)
                 results[rel_path] = matches
@@ -169,8 +247,17 @@ def main():
         # Step 6: Generate results summary
         result_file = os.path.join(output_dir, 'result.txt')
         with open(result_file, 'w', encoding='utf-8') as f:
-            f.write(f"Search Results for: '{search_string}'\n")
-            f.write(f"{'='*50}\n\n")
+            if use_timestamp_format and is_timestamp_format(search_string):
+                f.write(f"Timestamp Search Results for: '{search_string}'\n")
+                f.write(f"{'='*50}\n")
+                f.write(f"Search patterns used:\n")
+                for i, pattern in enumerate(search_patterns, 1):
+                    f.write(f"  {i}. {pattern}\n")
+                f.write(f"\n")
+            else:
+                f.write(f"Search Results for: '{search_string}'\n")
+                f.write(f"{'='*50}\n\n")
+            
             f.write(f"Total files searched: {len(all_log_files)}\n")
             f.write(f"  - Uncompressed: {len(log_files)}\n")
             f.write(f"  - Compressed: {len(compressed_log_files)}\n")
@@ -186,8 +273,11 @@ def main():
                     f.write(f"File: {file_path} ({file_type})\n")
                     f.write(f"Matches: {len(matches)}\n")
                     f.write("Lines:\n")
-                    for line_num, line_content in matches:
-                        f.write(f"  Line {line_num}: {line_content}\n")
+                    for line_num, line_content, matched_pattern in matches:
+                        if use_timestamp_format and is_timestamp_format(search_string):
+                            f.write(f"  Line {line_num} [matched: {matched_pattern}]: {line_content}\n")
+                        else:
+                            f.write(f"  Line {line_num}: {line_content}\n")
                     f.write("\n")
             else:
                 f.write("No matches found.\n")
