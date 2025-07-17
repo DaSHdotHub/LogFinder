@@ -4,6 +4,8 @@ import tarfile
 import tempfile
 import shutil
 import argparse
+import gzip
+import re
 from pathlib import Path
 from typing import List, Tuple, Dict
 
@@ -22,22 +24,50 @@ def find_tar_gz_files(directory: str) -> List[str]:
     return tar_gz_files
 
 def find_log_files(directory: str) -> List[str]:
-    """Find all .log files in the given directory."""
+    """Find all log files (both compressed and uncompressed) in the given directory."""
     log_files = []
     for root, dirs, files in os.walk(directory):
         for file in files:
-            if file.endswith('.log'):
+            # Match uncompressed .log files (but not .log.gz_* files)
+            if file.endswith('.log') and not re.match(r'.*\.log\.gz_\d+', file):
+                log_files.append(os.path.join(root, file))
+            # Match rotated log files (.log_numbers)
+            elif re.match(r'.*\.log_\d+$', file):
                 log_files.append(os.path.join(root, file))
     return log_files
+
+def find_compressed_log_files(directory: str) -> List[str]:
+    """Find all compressed log files (.gz, .log.gz_*) in the given directory."""
+    compressed_files = []
+    for root, dirs, files in os.walk(directory):
+        for file in files:
+            # Match .gz files (excluding .tar.gz) and .log.gz_* pattern files
+            if (file.endswith('.gz') and not file.endswith('.tar.gz')) or \
+               re.match(r'.*\.log\.gz_\d+', file):
+                compressed_files.append(os.path.join(root, file))
+    return compressed_files
+
+def is_compressed_file(file_path: str) -> bool:
+    """Check if a file is compressed based on its name."""
+    filename = os.path.basename(file_path)
+    return filename.endswith('.gz') or re.match(r'.*\.log\.gz_\d+', filename)
 
 def search_in_file(file_path: str, search_string: str) -> List[Tuple[int, str]]:
     """Search for a string in a file and return line numbers and content."""
     matches = []
     try:
-        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            for line_num, line in enumerate(f, 1):
-                if search_string in line:
-                    matches.append((line_num, line.strip()))
+        if is_compressed_file(file_path):
+            # Handle compressed files
+            with gzip.open(file_path, 'rt', encoding='utf-8', errors='ignore') as f:
+                for line_num, line in enumerate(f, 1):
+                    if search_string in line:
+                        matches.append((line_num, line.strip()))
+        else:
+            # Handle uncompressed files
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                for line_num, line in enumerate(f, 1):
+                    if search_string in line:
+                        matches.append((line_num, line.strip()))
     except Exception as e:
         print(f"Error reading file {file_path}: {e}")
     return matches
@@ -105,10 +135,15 @@ def main():
             except Exception as e:
                 print(f"Error extracting {tar_gz_file}: {e}")
         
-        # Step 3: Find all log files
-        print("Searching for .log files...")
+        # Step 3: Find all log files (both compressed and uncompressed)
+        print("Searching for log files...")
         log_files = find_log_files(extraction_dir)
-        print(f"Found {len(log_files)} log files")
+        compressed_log_files = find_compressed_log_files(extraction_dir)
+        all_log_files = log_files + compressed_log_files
+        
+        print(f"Found {len(log_files)} uncompressed log files")
+        print(f"Found {len(compressed_log_files)} compressed log files")
+        print(f"Total log files: {len(all_log_files)}")
         
         # Step 4: Search for the string in log files
         print(f"Searching for '{search_string}' in log files...")
@@ -116,14 +151,15 @@ def main():
         files_with_matches = []
         total_matches = 0
         
-        for log_file in log_files:
+        for log_file in all_log_files:
             matches = search_in_file(log_file, search_string)
             if matches:
                 rel_path = os.path.relpath(log_file, extraction_dir)
                 results[rel_path] = matches
                 files_with_matches.append(log_file)
                 total_matches += len(matches)
-                print(f"Found {len(matches)} matches in {rel_path}")
+                file_type = "compressed" if is_compressed_file(log_file) else "uncompressed"
+                print(f"Found {len(matches)} matches in {rel_path} ({file_type})")
         
         # Step 5: Copy matching files to output directory
         if files_with_matches:
@@ -135,7 +171,9 @@ def main():
         with open(result_file, 'w', encoding='utf-8') as f:
             f.write(f"Search Results for: '{search_string}'\n")
             f.write(f"{'='*50}\n\n")
-            f.write(f"Total files searched: {len(log_files)}\n")
+            f.write(f"Total files searched: {len(all_log_files)}\n")
+            f.write(f"  - Uncompressed: {len(log_files)}\n")
+            f.write(f"  - Compressed: {len(compressed_log_files)}\n")
             f.write(f"Files with matches: {len(files_with_matches)}\n")
             f.write(f"Total matches found: {total_matches}\n\n")
             
@@ -144,7 +182,8 @@ def main():
                 f.write("-" * 30 + "\n\n")
                 
                 for file_path, matches in results.items():
-                    f.write(f"File: {file_path}\n")
+                    file_type = "compressed" if any(pattern in file_path for pattern in ['.gz', '.log.gz_']) else "uncompressed"
+                    f.write(f"File: {file_path} ({file_type})\n")
                     f.write(f"Matches: {len(matches)}\n")
                     f.write("Lines:\n")
                     for line_num, line_content in matches:
@@ -162,4 +201,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
